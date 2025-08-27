@@ -74,12 +74,18 @@ class SearchAgent:
         Returns:
             Search results from Kubernetes resources
         """
-        filters = {'source': 'kubernetes'}
+        # Build filters - ChromaDB requires $and for multiple conditions
+        filters = {"source": "kubernetes"}
         
+        # Add additional filters using $and operator
+        additional_conditions = []
         if resource_kind:
-            filters['kind'] = resource_kind
+            additional_conditions.append({"kind": resource_kind})
         if namespace:
-            filters['namespace'] = namespace
+            additional_conditions.append({"namespace": namespace})
+            
+        if additional_conditions:
+            filters = {"$and": [filters] + additional_conditions}
             
         results = await self.vector_store.search(
             query=query,
@@ -112,12 +118,13 @@ class SearchAgent:
         Returns:
             Search results from GitHub resources
         """
-        filters = {'source': 'github'}
+        # Build filters - ChromaDB 1.0.20 uses simple dict format
+        filters = {"source": "github"}
         
         if repo_name:
-            filters['repo_name'] = repo_name
+            filters["repo_name"] = repo_name
         if language:
-            filters['language'] = language
+            filters["language"] = language
             
         results = await self.vector_store.search(
             query=query,

@@ -93,6 +93,9 @@ class TestChromaVectorStore:
 
     def test_prepare_document_text_github(self, vector_store, mock_github_entity):
         """Test document text preparation for GitHub entity."""
+        # Fix the mock to not have 'kind' attribute
+        delattr(mock_github_entity, 'kind') if hasattr(mock_github_entity, 'kind') else None
+        
         text = vector_store._prepare_document_text(mock_github_entity)
         
         assert "Source: github" in text
@@ -116,6 +119,9 @@ class TestChromaVectorStore:
 
     def test_extract_metadata_github(self, vector_store, mock_github_entity):
         """Test metadata extraction for GitHub entity."""
+        # Ensure the mock doesn't have 'kind' attribute to trigger GitHub path
+        delattr(mock_github_entity, 'kind') if hasattr(mock_github_entity, 'kind') else None
+        
         metadata = vector_store._extract_metadata(mock_github_entity)
         
         assert metadata["source"] == "github"

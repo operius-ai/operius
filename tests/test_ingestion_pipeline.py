@@ -177,6 +177,7 @@ class TestDataIngestionPipeline:
         assert "K8s connection failed" in result["error"]
 
     @pytest.mark.asyncio
+    @pytest.mark.asyncio
     async def test_ingest_github_repo_not_implemented(self, pipeline):
         """Test GitHub repository ingestion (not yet implemented)."""
         result = await pipeline.ingest_github_repo("owner/repo", branch="main")

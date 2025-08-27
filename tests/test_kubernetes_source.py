@@ -107,6 +107,7 @@ class TestKubernetesSource:
 
     @patch('backend.sources.kubernetes.config')
     @patch('backend.sources.kubernetes.client')
+    @pytest.mark.asyncio
     async def test_initialize_with_kubeconfig(self, mock_client, mock_config, k8s_source):
         """Test initialization with kubeconfig file."""
         k8s_source.kubeconfig_path = "/test/kubeconfig"
@@ -123,6 +124,7 @@ class TestKubernetesSource:
 
     @patch('backend.sources.kubernetes.config')
     @patch('backend.sources.kubernetes.client')
+    @pytest.mark.asyncio
     async def test_initialize_in_cluster(self, mock_client, mock_config, k8s_source):
         """Test initialization with in-cluster config."""
         mock_config.load_incluster_config.return_value = None
@@ -133,6 +135,7 @@ class TestKubernetesSource:
         assert k8s_source.api_client is not None
 
     @patch('backend.sources.kubernetes.config')
+    @pytest.mark.asyncio
     async def test_initialize_failure(self, mock_config, k8s_source):
         """Test initialization failure."""
         mock_config.load_incluster_config.side_effect = Exception("Config error")
