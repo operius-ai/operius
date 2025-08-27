@@ -2,14 +2,14 @@
 _Our AI agents detect kubernetes failures in real time and immediately tell engineers which code changes or manifests likely caused them._
 
 current functionality:
-data ingestion and search system that connects to github repositories and kubernetes clusters
-stores data in vector database
-_autonomous agents monitoring live k8s clusters and detecting issues_
-_generate static reports_
+* data ingestion and search system that connects to github repositories and kubernetes clusters
+* stores data in vector database
+* _autonomous agents monitoring live k8s clusters and detecting issues_
+* _generate static reports_
 
 TODO:
-agent triggers a vector search call on issue detection.
-output showing relevant commits, Dockerfiles, manifests, or previous cluster state.
+* agent triggers a vector search call on issue detection.
+* output showing relevant commits, Dockerfiles, manifests, or previous cluster state.
 
 ## tech stack
 
