@@ -17,8 +17,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Add paths for imports
-sys.path.append(str(Path(__file__).parent))
-sys.path.append(str(Path(__file__).parent.parent / "google-adk" / "src"))
+sys.path.append(str(Path(__file__).parent.parent))
+sys.path.append(str(Path(__file__).parent.parent.parent / "google-adk" / "src"))
 
 from backend.vector_store import ChromaVectorStore
 from backend.search_agent import SearchAgent
@@ -86,28 +86,40 @@ class KubernetesChat:
         """Create system prompt with search context."""
         context = ""
         if search_results.get('results'):
-            context = "KUBERNETES CLUSTER CONTEXT:\n"
+            context = "KNOWLEDGE BASE CONTEXT:\n"
             for i, result in enumerate(search_results['results'][:5], 1):
                 metadata = result.get('metadata', {})
-                context += f"{i}. {metadata.get('kind', 'Unknown')} '{metadata.get('name', 'Unknown')}' "
-                context += f"in namespace '{metadata.get('namespace', 'default')}'\n"
+                source = metadata.get('source', 'unknown')
+                
+                if source == 'kubernetes':
+                    context += f"{i}. [KUBERNETES] {metadata.get('kind', 'Unknown')} '{metadata.get('name', 'Unknown')}' "
+                    context += f"in namespace '{metadata.get('namespace', 'default')}'\n"
+                elif source == 'github':
+                    context += f"{i}. [GITHUB] File: {metadata.get('file_path', 'Unknown')} "
+                    context += f"in repository {metadata.get('repo_name', 'Unknown')}\n"
+                else:
+                    context += f"{i}. [UNKNOWN] {metadata}\n"
+                
                 if 'content' in result:
-                    context += f"   Details: {result['content'][:200]}...\n"
+                    content_preview = result['content'][:300].replace('\n', ' ')
+                    context += f"   Content: {content_preview}...\n"
             context += "\n"
         
-        return f"""You are a helpful Kubernetes expert assistant. You have access to information about a Kubernetes cluster.
+        return f"""You are a helpful DevOps and software engineering assistant. You have access to information about Kubernetes clusters and GitHub repositories.
 
 {context}
 
 Instructions:
-- Answer questions about Kubernetes resources based on the provided context
-- Be concise but informative
-- If the context doesn't contain relevant information, say so clearly
+- Answer questions based on the provided context from both Kubernetes resources and GitHub code
+- For code questions, analyze the actual file contents provided
+- For infrastructure questions, reference the Kubernetes resource details
+- Be specific and informative, citing the actual content when relevant
+- If the context doesn't contain enough information, say so clearly
 - Use emojis to make responses friendly and easy to read
 - Focus on practical, actionable information
-- If asked about resources not in the context, suggest what commands or searches might help
+- When asked about technologies (like TypeScript), look at file extensions and content
 
-Remember: You're helping someone understand and manage their Kubernetes cluster."""
+Remember: You're helping someone understand their infrastructure and codebase."""
 
     async def search_knowledge_base(self, query: str) -> Dict[str, Any]:
         """Search the knowledge base for relevant information."""
@@ -169,6 +181,51 @@ Remember: You're helping someone understand and manage their Kubernetes cluster.
         
         return response
     
+    async def run_demo_queries(self):
+        """Run interactive search demonstrations."""
+        print("\n🔎 Interactive Search Demonstrations")
+        print("-" * 40)
+        print("Running example queries to show what's possible...\n")
+        
+        # Demo queries
+        demo_queries = [
+            ("Find all running pods", "kubernetes"),
+            ("Show me services", "kubernetes"), 
+            ("What deployments are available?", "kubernetes"),
+            ("List namespaces", "kubernetes"),
+            ("Show cluster resources", None),
+            ("What's in the GitHub repository?", None)
+        ]
+        
+        for query, source_filter in demo_queries:
+            print(f"🔍 Query: '{query}'")
+            
+            try:
+                # Analyze intent
+                intent = await self.search_agent.analyze_query_intent(query)
+                if intent['detected_intents']:
+                    print(f"🧠 Detected intent: {', '.join(intent['detected_intents'])}")
+                
+                # Perform search
+                if source_filter:
+                    results = await self.search_agent.search_kubernetes(query, max_results=3)
+                else:
+                    results = await self.search_agent.search(query, max_results=3)
+                
+                if results['total_results'] > 0:
+                    print(f"📋 Found {results['total_results']} results:")
+                    formatted = self.search_agent.format_search_results(results['results'][:2])  # Show top 2
+                    print(formatted)
+                else:
+                    print("📭 No results found")
+                    
+            except Exception as e:
+                print(f"❌ Error running demo query: {e}")
+            
+            print()  # Add spacing between queries
+        
+        print("✅ Demo completed! Try asking your own questions now.\n")
+    
     def print_help(self):
         """Print help information."""
         print("""
@@ -181,6 +238,7 @@ Remember: You're helping someone understand and manage their Kubernetes cluster.
 🔧 Special Commands:
    • /help - Show this help
    • /stats - Show knowledge base statistics  
+   • /demo - Run interactive search demonstrations
    • /history - Show conversation history
    • /clear - Clear conversation history
    • /quit or /exit - Exit the chat
@@ -226,6 +284,9 @@ Remember: You're helping someone understand and manage their Kubernetes cluster.
                 elif user_input.lower() == '/clear':
                     self.conversation_history.clear()
                     print("🗑️  Conversation history cleared.")
+                    continue
+                elif user_input.lower() == '/demo':
+                    await self.run_demo_queries()
                     continue
                 
                 # Handle regular query

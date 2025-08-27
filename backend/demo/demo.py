@@ -31,13 +31,142 @@ from backend.ingestion_pipeline import DataIngestionPipeline
 from backend.search_agent import SearchAgent
 
 
+async def add_github_repository(vector_store, repo_name: str) -> bool:
+    """Add a GitHub repository to the knowledge base."""
+    try:
+        github_token = os.getenv("GITHUB_TOKEN")
+        base_url = "https://api.github.com"
+        
+        headers = {
+            "Accept": "application/vnd.github.v3+json",
+            "User-Agent": "operius-knowledge-base"
+        }
+        if github_token:
+            headers["Authorization"] = f"token {github_token}"
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # Get repository info
+            repo_url = f"{base_url}/repos/{repo_name}"
+            repo_response = await client.get(repo_url, headers=headers)
+            repo_response.raise_for_status()
+            repo_data = repo_response.json()
+            
+            print(f"📁 Repository: {repo_data['full_name']}")
+            print(f"📝 Description: {repo_data.get('description', 'No description')}")
+            
+            # Get default branch and file tree
+            default_branch = repo_data.get("default_branch", "main")
+            tree_url = f"{base_url}/repos/{repo_name}/git/trees/{default_branch}"
+            tree_response = await client.get(tree_url, headers=headers, params={"recursive": "1"})
+            tree_response.raise_for_status()
+            tree_data = tree_response.json()
+            
+            # Filter text files
+            text_extensions = {'.py', '.js', '.md', '.txt', '.yml', '.yaml', '.json', '.toml'}
+            text_files = [
+                item for item in tree_data.get("tree", [])
+                if item["type"] == "blob" and Path(item["path"]).suffix.lower() in text_extensions
+            ]
+            
+            print(f"🔍 Found {len(text_files)} text files, processing first 20...")
+            
+            # Process files
+            documents_added = 0
+            chroma_client = chromadb.PersistentClient(path="./chroma_db")
+            collection = chroma_client.get_collection("operius_demo")
+            embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+            
+            documents, metadatas, ids = [], [], []
+            
+            for file_item in text_files[:20]:
+                file_path = file_item["path"]
+                try:
+                    # Get file content
+                    file_url = f"{base_url}/repos/{repo_name}/contents/{file_path}"
+                    file_response = await client.get(file_url, headers=headers, params={"ref": default_branch})
+                    file_response.raise_for_status()
+                    file_data = file_response.json()
+                    
+                    if file_data.get("encoding") == "base64":
+                        content = base64.b64decode(file_data["content"]).decode("utf-8", errors="ignore")
+                        if content.strip():
+                            doc_id = f"github_{repo_name.replace('/', '_')}_{file_path.replace('/', '_')}"
+                            document_text = f"File: {file_path}\nRepository: {repo_name}\n\n{content}"
+                            
+                            metadata = {
+                                "source": "github",
+                                "repo_name": str(repo_name),
+                                "file_path": str(file_path),
+                                "file_name": str(Path(file_path).name),
+                                "file_extension": str(Path(file_path).suffix),
+                                "repo_description": str(repo_data.get('description') or ''),
+                                "url": f"https://github.com/{repo_name}/blob/{default_branch}/{file_path}"
+                            }
+                            
+                            documents.append(document_text)
+                            metadatas.append(metadata)
+                            ids.append(doc_id)
+                            documents_added += 1
+                            
+                except Exception as e:
+                    print(f"    ⚠️  Error processing {file_path}: {e}")
+                    continue
+            
+            # Add to ChromaDB
+            if documents:
+                embeddings = embedding_model.encode(documents).tolist()
+                collection.add(documents=documents, metadatas=metadatas, ids=ids, embeddings=embeddings)
+                print(f"✅ Successfully added {documents_added} documents from GitHub repository")
+                return True
+            
+    except Exception as e:
+        print(f"❌ Error adding GitHub repository: {e}")
+        return False
+    
+    return False
+
+
 async def main():
     """Run the complete Operius demo."""
     print("Operius Knowledge Base Demo")
     print("=" * 50)
     
+    # Step 0: Optional GitHub repository indexing
+    print("\n🔧 Step 0: GitHub Repository Indexing (Optional)")
+    print("-" * 40)
+    
+    try:
+        add_github = input("Do you want to index a GitHub repository? (y/n): ").strip().lower()
+        if add_github in ['y', 'yes']:
+            github_url = input("Enter GitHub repository URL or owner/repo: ").strip()
+            
+            # Parse URL to get owner/repo
+            if github_url.startswith("https://github.com/"):
+                repo_name = github_url.replace("https://github.com/", "").rstrip("/")
+            elif github_url.startswith("github.com/"):
+                repo_name = github_url.replace("github.com/", "").rstrip("/")
+            else:
+                repo_name = github_url
+            
+            if "/" in repo_name:
+                print(f"🎯 Indexing repository: {repo_name}")
+                github_token = os.getenv("GITHUB_TOKEN")
+                if not github_token:
+                    print("⚠️  No GITHUB_TOKEN found. Using unauthenticated requests (rate limited).")
+                else:
+                    print("✅ GitHub token found - using authenticated requests")
+            else:
+                print("❌ Invalid repository format. Skipping GitHub indexing.")
+                add_github = 'n'
+        else:
+            print("⏭️  Skipping GitHub repository indexing")
+    except KeyboardInterrupt:
+        print("\n⏭️  Skipping GitHub repository indexing")
+        add_github = 'n'
+    
     # Initialize components
-    print("\n📦 Initializing components...")
+    print("\n📦 Step 1: Initializing components...")
+    print("-" * 40)
     
     # Vector store
     vector_store = ChromaVectorStore(
@@ -45,6 +174,11 @@ async def main():
         collection_name="operius_demo"
     )
     print("✅ ChromaDB vector store initialized")
+    
+    # Add GitHub repository if requested
+    if add_github in ['y', 'yes'] and "/" in repo_name:
+        print("\n📥 Adding GitHub repository to knowledge base...")
+        await add_github_repository(vector_store, repo_name)
     
     # Ingestion pipeline
     pipeline = DataIngestionPipeline(
@@ -57,9 +191,11 @@ async def main():
     agent = SearchAgent(vector_store)
     print("✅ Search agent initialized")
     
-    # Step 1: Get cluster summary
-    print("\n🔍 Step 1: Kubernetes Cluster Analysis")
+    # Step 2: Get cluster summary
+    print("\n🔍 Step 2: Finding Kubernetes clusters...")
     print("-" * 40)
+    print("🔍 Searching for Kubernetes clusters...")
+    print("📡 Connecting to minikube cluster...")
     
     try:
         cluster_summary = await pipeline.get_cluster_summary()
@@ -78,8 +214,8 @@ async def main():
         print("💡 Make sure minikube is running and kubectl is configured")
         return
     
-    # Step 2: Data ingestion
-    print("\n📥 Step 2: Data Ingestion")
+    # Step 3: Data ingestion
+    print("\n📥 Step 3: Data Ingestion")
     print("-" * 40)
     
     print("🔄 Ingesting Kubernetes metadata...")
@@ -94,74 +230,15 @@ async def main():
         print(f"❌ Ingestion failed: {k8s_result.get('error', 'Unknown error')}")
         return
     
-    # Step 3: Vector store statistics
-    print("\n📊 Step 3: Knowledge Base Statistics")
-    print("-" * 40)
-    
-    stats = vector_store.get_collection_stats()
-    print(f"📚 Total documents: {stats['total_documents']}")
-    print(f"🔍 Embedding model: {stats['embedding_model']}")
-    print(f"📂 Data sources: {list(stats['sources'].keys())}")
-    
-    if stats['kubernetes_kinds']:
-        print(f"☸️  Kubernetes resource types:")
-        for kind, count in stats['kubernetes_kinds'].items():
-            print(f"   • {kind}: {count}")
-    
-    # Step 4: Interactive search demo
-    print("\n🔎 Step 4: Search Demonstrations")
-    print("-" * 40)
-    
-    # Demo queries
-    demo_queries = [
-        ("Find all running pods", "kubernetes"),
-        ("Show me services", "kubernetes"), 
-        ("What deployments are available?", "kubernetes"),
-        ("List namespaces", "kubernetes"),
-        ("Show cluster resources", None)
-    ]
-    
-    for query, source_filter in demo_queries:
-        print(f"\n🔍 Query: '{query}'")
-        
-        # Analyze intent
-        intent = await agent.analyze_query_intent(query)
-        if intent['detected_intents']:
-            print(f"🧠 Detected intent: {', '.join(intent['detected_intents'])}")
-        
-        # Perform search
-        if source_filter:
-            results = await agent.search_kubernetes(query, max_results=3)
-        else:
-            results = await agent.search(query, max_results=3)
-        
-        if results['total_results'] > 0:
-            print(f"📋 Found {results['total_results']} results:")
-            formatted = agent.format_search_results(results['results'][:2])  # Show top 2
-            print(formatted)
-        else:
-            print("📭 No results found")
-    
-    # Step 5: Knowledge base overview
-    print("\n📈 Step 5: Knowledge Base Overview")
-    print("-" * 40)
-    
-    overview = await agent.get_cluster_overview()
-    print(f"🕐 Overview generated at: {overview['overview_timestamp']}")
-    
-    if overview['sample_data'].get('kubernetes'):
-        print(f"🔍 Sample Kubernetes resources:")
-        for i, sample in enumerate(overview['sample_data']['kubernetes'][:2], 1):
-            metadata = sample['metadata']
-            print(f"   {i}. {metadata.get('kind', 'Unknown')} '{metadata.get('name', 'Unknown')}' "
-                  f"in {metadata.get('namespace', 'default')}")
-    
     print("\n🎉 Demo completed successfully!")
     print("\n💡 Next steps:")
-    print("   • Add GitHub repositories to the knowledge base")
-    print("   • Integrate with the google-adk agent for AI-powered responses")
-    print("   • Build a web interface for easier interaction")
-    print("   • Set up automated ingestion pipelines")
+    print("   • Use the interactive chat interface: python -m backend.chat")
+    print("   • Try /stats to see knowledge base statistics")
+    print("   • Ask questions about your Kubernetes cluster and GitHub repositories")
+    print("   • Use /help to see available commands")
+    
+
+    
 
 
 if __name__ == "__main__":
